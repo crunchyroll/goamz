@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	"sort"
 	"strconv"
@@ -191,6 +192,52 @@ func (m *Multi) putPart(n int, r io.ReadSeeker, partSize int64, md5b64 string) (
 	panic("unreachable")
 }
 
+type copyPartResult struct {
+	LastModified string `xml:"LastModified"`
+	ETag         string `xml:"ETag"`
+}
+
+func (m *Multi) putCopyPart(source string, n int, offset, partSize int64) (Part, error) {
+	headers := map[string][]string{
+		"x-amz-copy-source":       {source},
+		"x-amz-copy-source-range": {fmt.Sprintf("bytes=%d-%d", offset, offset+partSize)},
+	}
+	params := map[string][]string{
+		"uploadId":   {m.UploadId},
+		"partNumber": {strconv.FormatInt(int64(n), 10)},
+	}
+	for attempt := m.Bucket.S3.AttemptStrategy.Start(); attempt.Next(); {
+		req := &request{
+			method:  "PUT",
+			bucket:  m.Bucket.Name,
+			path:    m.Key,
+			headers: headers,
+			params:  params,
+		}
+		err := m.Bucket.S3.prepare(req)
+		if err != nil {
+			return Part{}, err
+		}
+		resp, err := m.Bucket.S3.run(req, nil)
+		if shouldRetry(err) && attempt.HasNext() {
+			continue
+		}
+		if err != nil {
+			return Part{}, err
+		}
+		partResponse := copyPartResult{}
+		if err := xml.NewDecoder(resp.Body).Decode(&partResponse); err != nil {
+			return Part{}, err
+		}
+		etag := partResponse.ETag
+		if etag == "" {
+			return Part{}, errors.New("part upload succeeded with no ETag")
+		}
+		return Part{n, etag, partSize}, nil
+	}
+	panic("unreachable")
+}
+
 func seekerInfo(r io.ReadSeeker) (size int64, md5hex string, md5b64 string, err error) {
 	_, err = r.Seek(0, 0)
 	if err != nil {
@@ -267,6 +314,37 @@ func (m *Multi) ListParts() ([]Part, error) {
 type ReaderAtSeeker interface {
 	io.ReaderAt
 	io.ReadSeeker
+}
+
+// PutCopyAll sends a request to copy a s3 source object from a
+// separate bucket via multipart upload with parts no larger than
+// partSize bytes, which must be set to at least 5MB.
+// PutCopyAll returns all the parts of m.
+func (m *Multi) PutCopyAll(source string, partSize, objectSize int64) ([]Part, error) {
+	current := 1 // Part number of latest good part handled.
+
+	first := true // Must send at least one empty part if the file is empty.
+	var result []Part
+
+	// Multipart copy indexes bytes from 0. To account for this offset the
+	// objectSize by 1
+	objectSize = objectSize - 1
+
+	for offset := int64(0); offset < objectSize || first; offset += partSize {
+		first = false
+		if offset+partSize > objectSize {
+			partSize = objectSize - offset
+		}
+
+		// Part wasn't found or doesn't match. Send it.
+		part, err := m.putCopyPart(source, current, offset, partSize)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, part)
+		current++
+	}
+	return result, nil
 }
 
 // PutAll sends all of r via a multipart upload with parts no larger
