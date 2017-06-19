@@ -198,6 +198,11 @@ type copyPartResult struct {
 }
 
 func (m *Multi) putCopyPart(source string, n int, offset, partSize int64) (Part, error) {
+	// Multipart copy indexes bytes from 0. A partSize of 10 bytes should
+	// produce the range 0-9, 10-19, etc. We account for this by offseting the
+	// partSize by one.
+	partSize = partSize - 1
+
 	headers := map[string][]string{
 		"x-amz-copy-source":       {source},
 		"x-amz-copy-source-range": {fmt.Sprintf("bytes=%d-%d", offset, offset+partSize)},
@@ -326,17 +331,12 @@ func (m *Multi) PutCopyAll(source string, partSize, objectSize int64) ([]Part, e
 	first := true // Must send at least one empty part if the file is empty.
 	var result []Part
 
-	// Multipart copy indexes bytes from 0. To account for this offset the
-	// objectSize by 1
-	objectSize = objectSize - 1
-
 	for offset := int64(0); offset < objectSize || first; offset += partSize {
 		first = false
 		if offset+partSize > objectSize {
 			partSize = objectSize - offset
 		}
 
-		// Part wasn't found or doesn't match. Send it.
 		part, err := m.putCopyPart(source, current, offset, partSize)
 		if err != nil {
 			return nil, err
