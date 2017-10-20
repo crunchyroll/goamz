@@ -34,8 +34,9 @@ const debug = false
 type SQS struct {
 	aws.Auth
 	aws.Region
-	private   byte // Reserve the right of using private data.
-	transport *http.Transport
+	private      byte // Reserve the right of using private data.
+	transport    *http.Transport
+	roundTripper http.RoundTripper
 }
 
 // NewFrom Create A new SQS Client given an access and secret Key
@@ -78,12 +79,17 @@ func NewFrom(accessKey, secretKey, region string) (*SQS, error) {
 
 // NewFrom Create A new SQS Client from an exisisting aws.Auth
 func New(auth aws.Auth, region aws.Region) *SQS {
-	return &SQS{auth, region, 0, nil}
+	return &SQS{auth, region, 0, nil, nil}
 }
 
 // NewFromTransport Create A new SQS Client that uses a given &http.Transport
 func NewFromTransport(auth aws.Auth, region aws.Region, transport *http.Transport) *SQS {
-	return &SQS{auth, region, 0, transport}
+	return &SQS{auth, region, 0, transport, nil}
+}
+
+// NewFromRoundTripper Create A new SQS Client that uses the given round tripper
+func NewFromRoundTripper(auth aws.Auth, region aws.Region, transport http.RoundTripper) *SQS {
+	return &SQS{auth, region, 0, nil, transport}
 }
 
 // Queue Reference to a Queue
@@ -522,10 +528,12 @@ func (s *SQS) query(queueUrl string, params map[string]string, resp interface{})
 	signer := aws.NewV4Signer(s.Auth, "sqs", s.Region)
 	signer.Sign(req)
 	var client http.Client
-	if s.transport == nil {
-		client = http.Client{}
-	} else {
+	if s.transport != nil {
 		client = http.Client{Transport: s.transport}
+	} else if s.roundTripper != nil {
+		client = http.Client{Transport: s.roundTripper}
+	} else {
+		client = http.Client{}
 	}
 	r, err = client.Do(req)
 
