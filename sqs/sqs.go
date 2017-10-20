@@ -36,6 +36,7 @@ type SQS struct {
 	aws.Region
 	private   byte // Reserve the right of using private data.
 	transport *http.Transport
+	client    *http.Client
 }
 
 // NewFrom Create A new SQS Client given an access and secret Key
@@ -78,12 +79,17 @@ func NewFrom(accessKey, secretKey, region string) (*SQS, error) {
 
 // NewFrom Create A new SQS Client from an exisisting aws.Auth
 func New(auth aws.Auth, region aws.Region) *SQS {
-	return &SQS{auth, region, 0, nil}
+	return &SQS{auth, region, 0, nil, nil}
 }
 
 // NewFromTransport Create A new SQS Client that uses a given &http.Transport
 func NewFromTransport(auth aws.Auth, region aws.Region, transport *http.Transport) *SQS {
-	return &SQS{auth, region, 0, transport}
+	return &SQS{auth, region, 0, transport, nil}
+}
+
+// NewFromClient Create A new SQS Client that uses a given http.Client
+func NewFromClient(auth aws.Auth, region aws.Region, client *http.Client) *SQS {
+	return &SQS{auth, region, 0, nil, client}
 }
 
 // Queue Reference to a Queue
@@ -522,10 +528,13 @@ func (s *SQS) query(queueUrl string, params map[string]string, resp interface{})
 	signer := aws.NewV4Signer(s.Auth, "sqs", s.Region)
 	signer.Sign(req)
 	var client http.Client
-	if s.transport == nil {
-		client = http.Client{}
-	} else {
+
+	if s.client != nil {
+		client = *s.client
+	} else if s.transport != nil {
 		client = http.Client{Transport: s.transport}
+	} else {
+		client = http.Client{}
 	}
 	r, err = client.Do(req)
 
