@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"time"
+	"sync"
 
 	"github.com/vaughan0/go-ini"
 )
@@ -29,6 +30,9 @@ const (
 	V4Signature      = iota
 	Route53Signature = iota
 )
+
+var currentInstanceAuth Auth
+var currentInstanceAuthMutex = &sync.Mutex{}
 
 // Defines the service endpoint and correct Signer implementation to use
 // to sign requests for this endpoint
@@ -120,7 +124,7 @@ func NewService(auth Auth, service ServiceInfo) (s *Service, err error) {
 	case V2Signature:
 		signer, err = NewV2Signer(auth, service)
 	// case V4Signature:
-	// 	signer, err = NewV4Signer(auth, service, Regions["eu-west-1"])
+	//	signer, err = NewV4Signer(auth, service, Regions["eu-west-1"])
 	default:
 		err = fmt.Errorf("Unsupported signer for service")
 	}
@@ -282,7 +286,6 @@ func getInstanceCredentials() (cred credentials, err error) {
 	if err != nil {
 		return
 	}
-
 	// Get the instance role credentials
 	credentialJSON, err := GetMetaData(credentialPath + string(role))
 	if err != nil {
@@ -296,6 +299,9 @@ func getInstanceCredentials() (cred credentials, err error) {
 // GetAuth creates an Auth based on either passed in credentials,
 // environment information or instance based role credentials.
 func GetAuth(accessKey string, secretKey, token string, expiration time.Time) (auth Auth, err error) {
+	currentInstanceAuthMutex.Lock()
+	defer currentInstanceAuthMutex.Unlock()
+
 	// First try passed in credentials
 	if accessKey != "" && secretKey != "" {
 		return Auth{accessKey, secretKey, token, expiration}, nil
@@ -315,6 +321,10 @@ func GetAuth(accessKey string, secretKey, token string, expiration time.Time) (a
 		return
 	}
 
+	if currentInstanceAuth.expiration.After(time.Now()) {
+		return currentInstanceAuth, nil
+	}
+
 	// Next try getting auth from the instance role
 	cred, err := getInstanceCredentials()
 	if err == nil {
@@ -327,6 +337,7 @@ func GetAuth(accessKey string, secretKey, token string, expiration time.Time) (a
 			err = fmt.Errorf("Error Parseing expiration date: cred.Expiration :%s , error: %s \n", cred.Expiration, err)
 		}
 		auth.expiration = exptdate
+		currentInstanceAuth = auth
 		return auth, err
 	}
 	err = errors.New("No valid AWS authentication found: " + err.Error())
