@@ -260,6 +260,9 @@ func (b *Bucket) GetResponseWithHeaders(path string, headers map[string][]string
 	}
 	for attempt := b.S3.AttemptStrategy.Start(); attempt.Next(); {
 		resp, err := b.S3.run(req, nil)
+		if resp != nil {
+			defer resp.Body.Close()
+		}
 		if shouldRetry(err) && attempt.HasNext() {
 			continue
 		}
@@ -284,6 +287,9 @@ func (b *Bucket) Exists(path string) (exists bool, err error) {
 	}
 	for attempt := b.S3.AttemptStrategy.Start(); attempt.Next(); {
 		resp, err := b.S3.run(req, nil)
+		if resp != nil {
+			defer resp.Body.Close()
+		}
 
 		if shouldRetry(err) && attempt.HasNext() {
 			continue
@@ -321,6 +327,9 @@ func (b *Bucket) Head(path string, headers map[string][]string) (*http.Response,
 
 	for attempt := b.S3.AttemptStrategy.Start(); attempt.Next(); {
 		resp, err := b.S3.run(req, nil)
+		if resp != nil {
+			defer resp.Body.Close()
+		}
 		if shouldRetry(err) && attempt.HasNext() {
 			continue
 		}
